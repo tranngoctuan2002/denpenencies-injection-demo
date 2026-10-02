@@ -1,0 +1,15 @@
+## build output
+bin/
+obj/
+*.user
+.vs/
+.idea/
+
+## machine-local helpers (this dev box had a full C: drive)
+.nuget/
+.tmp/
+nuget.config
+
+## OS
+Thumbs.db
+.DS_Store
