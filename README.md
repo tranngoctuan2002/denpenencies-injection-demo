@@ -1,4 +1,67 @@
-# Dependency Injection live demo (ASP.NET Core / .NET 10)
+# This repo contains two demos
+
+| Demo | What it is | Needs |
+|---|---|---|
+| **Officely** (`src/Officely.Api`, `src/Officely.Web`) | A working team store (shop, shared cart, checkout, orders, background fulfilment, customer e-mails) with four Dependency Injection case studies you can deploy broken and fixed from a dev panel | .NET 10 SDK, Node 20.19+/22.12+. **No Docker**: data is in a local SQLite file |
+| **DiDemo** (`src/DiDemo.Web`) | The original 10-page hands-on demo (described further below) | .NET 10 SDK, Docker (SQL Server) |
+
+## Officely
+
+### Run it
+```bash
+cd src/Officely.Web
+npm ci
+npm run build                               # builds the React store into src/Officely.Api/wwwroot
+cd ../..
+dotnet run --project src/Officely.Api   # http://localhost:5100
+```
+While editing the frontend, run `npm run dev` in `src/Officely.Web` instead (http://localhost:5173, proxies `/api` to :5100).
+
+```bash
+dotnet test                                 # whole solution: Officely.Tests + DiDemo.Tests (no database server needed)
+```
+The SQLite database (`src/Officely.Api/officely.db`) is created and seeded on first start. Use **Reset shop data** in the dev panel, or delete the file, to start over. Delete it after pulling changes to the data model too: the app creates the schema but does not migrate it. The team cart lives in memory, so every redeploy from the dev panel empties it, just as it would in a real deployment.
+
+### The store
+| Page | What happens |
+|---|---|
+| Shop | Six products. "Add to cart" goes to the **team cart**, which everyone in the office shares |
+| Team cart | Change quantities, then check out with **Stripe, PayPal or MoMo** (fake providers, no credentials) |
+| Shop (stock) | Each product shows its stock; checkout lowers it and refuses to oversell |
+| Orders | Orders start as *Paid* and can be cancelled for 15 seconds. `FulfilmentWorker`, a `BackgroundService` running every 5 seconds, ships them after that |
+| Inbox | Development mail server: order confirmations and "has shipped" e-mails land here |
+
+### The case studies (🛠 dev panel)
+Each case study swaps **one** registration from `AddShop()` for its broken version and **redeploys the shop in-process** (`Program.cs` runs a restart loop). The failure is therefore the real one, in the real app: at startup, as an HTTP 500, or as silently wrong data. The **Validate the service graph at startup** switch toggles `ValidateScopes` + `ValidateOnBuild`: on is the Development default, off is the Production default.
+
+| # | Broken registration | What you see in the store | Fix in the code |
+|---|---|---|---|
+| 1 | `IOrderService → TightlyCoupledOrderService` (`new StripePaymentProcessor()` + if/else) | Paying with **MoMo** returns HTTP 500 `NotSupportedException`; Stripe and PayPal work | `IPaymentProcessor` × 3 + `PaymentProcessorResolver(IEnumerable<IPaymentProcessor>)` |
+| 2 | `NotifyingOrderService ⇄ NotificationService` | Validation on: **the shop does not start** (circular dependency). Off: Orders and checkout return HTTP 500 | `OrderCompleted` event + `IOrderCompletedHandler` (in-process, **not** durable) |
+| 3 | `IOrderService` registered as **Singleton** | Validation on: **startup fails**, "Cannot consume scoped service ShopDbContext". Off: the customer gets "has shipped" but **Orders shows Paid forever** (captured DbContext) | `IOrderService` Scoped; `FulfilmentWorker` uses `IServiceScopeFactory.CreateAsyncScope()` per run |
+| 4 | `ICartService → UnsafeCartService` (Singleton, read → await → write) | **Simulate 100 buyers** sends 100 real HTTP requests and most mugs go missing; one user clicking never notices | One `lock` around the whole read-modify-write |
+| 5 | `ShopDbContext` registered as **Transient** | Orders save, but **stock never goes down**, so the shop oversells. Validation does not notice | Scoped `ShopDbContext`: `StockService` and `OrderService` share it, and one `SaveChangesAsync` commits both |
+| 6 | `ICartSummary → ParallelCartSummary` (`Task.WhenAll` on one DbContext) | With one product the cart works; with two, HTTP 500 "A second operation was started on this context instance" | One query for all cart lines (`IDbContextFactory` if work must really run in parallel) |
+| 7 | `CaptiveFulfilmentWorker(ShopDbContext db, …)` hosted service | Validation on: **startup fails** (Scoped from singleton `IHostedService`). Off: an order **cancelled by the customer ships anyway** (stale tracked copy) | `FulfilmentWorker`: `IServiceScopeFactory.CreateAsyncScope()` per run |
+
+Each card has **Explain**, with the cause, the code (broken and fixed side by side, read from the running source) and the dependency graph (built from the same registrations, with cycle and captive edges detected). **Takeaways** lists the best practices. `docs/case-studies.md` is a walkthrough for presenting it.
+
+### Code map
+```
+src/Officely.Api/
+  Program.cs                 restart loop used by the dev panel
+  ShopHost.cs                builds the WebApplication (validation switch, ProblemDetails, static files)
+  ShopRegistration.cs        AddShop(): the correct service registrations
+  ShopEndpoints.cs           /api/products, /api/cart, /api/checkout, /api/orders, /api/inbox
+  Data/ Payments/ Cart/ Orders/ Notifications/   the store itself
+  CaseStudies/               dev tooling: broken implementations, the registration switch, /api/dev endpoints
+src/Officely.Web/        React + TypeScript + Vite + Tailwind store and dev panel
+tests/Officely.Tests/    xUnit: every case study broken and fixed, plus checkout, stock, worker scopes and graphs
+```
+
+---
+
+# DiDemo: Dependency Injection live demo (ASP.NET Core / .NET 10)
 
 One realistic feature - **Place Order** - used to show the DI technique, the three lifetimes and seven case studies.
 

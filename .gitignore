@@ -13,3 +13,10 @@ nuget.config
 ## OS
 Thumbs.db
 .DS_Store
+
+## Officely (build output, local SQLite database)
+node_modules/
+src/Officely.Api/wwwroot/
+*.db
+*.db-shm
+*.db-wal

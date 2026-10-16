@@ -1,0 +1,4 @@
+@import "tailwindcss";
+
+body { font-family: "Segoe UI", system-ui, sans-serif; background: #f8fafc; color: #0f172a; }
+code, pre { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; }
